@@ -23,7 +23,7 @@ angular.module('httpMocker', [])
     try { return new ActiveXObject("Msxml2.XMLHTTP"); } catch (e3) {}
     throw new Error("This browser does not support XMLHttpRequest.");
   };
-  var lowercase = function(string){return isString(string) ? string.toLowerCase() : string;};
+  var lowercase = function(string){return _.isString(string) ? string.toLowerCase() : string;};
 
   var SERVER_MATCH = /^([^:]+):\/\/(\w+:{0,1}\w*@)?(\{?[\w\.-]*\}?)(:([0-9]+))?(\/[^\?#]*)?(\?([^#]*))?(#(.*))?$/;
   var noop = function(){};
@@ -90,7 +90,7 @@ angular.module('httpMocker', [])
           var xhr = new XHR();
 
           xhr.open(method, url, true);
-          forEach(headers, function(value, key) {
+          _.forEach(headers, function(value, key) {
             if (value) xhr.setRequestHeader(key, value);
           });
 
@@ -112,7 +112,7 @@ angular.module('httpMocker', [])
                 "Expires", "Last-Modified", "Pragma"];
               if (!responseHeaders) {
                 responseHeaders = "";
-                forEach(simpleHeaders, function (header) {
+                _.forEach(simpleHeaders, function (header) {
                   var value = xhr.getResponseHeader(header);
                   if (value) {
                     responseHeaders += header + ": " + value + "\n";
