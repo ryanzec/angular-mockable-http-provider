@@ -1,18 +1,36 @@
 angular.module('httpMocker', [])
 .factory('httpMocker', [function() {
   var mocks = {};
+
+  var getMockKey = function(method, url, payload) {
+    //console.log(payload);
+    var mockKey = method + url;
+
+    if(!_.isEmpty(payload) && (_.isString(payload) || _.isObject(payload))) {
+      if(_.isObject(payload)) {
+        mockKey += JSON.stringify(payload);
+      } else {
+        mockKey += payload;
+      }
+    }
+
+    //console.log(mockKey);
+    return mockKey;
+  }
+
   return {
     register: function(method, url, response, options) {
       options = options || {};
-      mocks[method + '||' + url] = {
+      mocks[getMockKey(method, url, options.payload)] = {
         response: response || '',
         statusCode: options.statusCode || 200,
         headers: options.headers || '',
-        payload: options.payload || undefined
+        payload: options.payload || undefined,
+        delay: options.delay || 0
       }
     },
-    resolve: function(method, url) {
-      return mocks[method + '||' + url] || false;
+    resolve: function(method, url, payload) {
+      return mocks[getMockKey(method, url, payload)] || false;
     }
   }
 }])
@@ -49,7 +67,7 @@ angular.module('httpMocker', [])
   return {
     '$get': ['$browser', '$window', '$document', 'httpMocker', '$timeout', function($browser, $window, $document, httpMocker, $timeout) {
       return createHttpBackend($browser, XHR, $browser.defer, $window.angular.callbacks,
-      $document[0], $window.location.protocol.replace(':', ''), httpMocker);
+      $document[0], $window.location.protocol.replace(':', ''), httpMocker, $timeout);
     }]
   };
 
@@ -77,15 +95,15 @@ angular.module('httpMocker', [])
         });
       } else {
         //see if the url should be mocked and if so, just return the mocked data
-        var mockedData = httpMocker.resolve(method, url);
+        var mockedData = httpMocker.resolve(method, url, post);
 
-        if(mockedData) {
-          //console.log(post);
-          //console.log(mockedData.payload);
-          //console.log(post == mockedData.payload);
-          if(post == mockedData.payload) {
+        //console.log(post);
+        //console.log(JSON.stringify(mockedData.payload));
+        if(mockedData && post == JSON.stringify(mockedData.payload)) {
+          //we want to be able to simulate a delay in the response
+          $timeout(function() {
             completeRequest(callback, mockedData.statusCode, mockedData.response, mockedData.headers);
-          }
+          }, mockedData.delay);
         } else {
           var xhr = new XHR();
 
