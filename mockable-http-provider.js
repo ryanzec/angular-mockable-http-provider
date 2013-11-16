@@ -4,7 +4,7 @@ angular.module('httpMocker', [])
 
   var getMockKey = function(method, url, payload) {
     //console.log(payload);
-    var mockKey = method + url;
+    var mockKey = method.toLowerCase() + url;
 
     if(!_.isEmpty(payload) && (_.isString(payload) || _.isObject(payload))) {
       if(_.isObject(payload)) {
@@ -79,20 +79,32 @@ angular.module('httpMocker', [])
       url = url || $browser.url();
 
       if (lowercase(method) == 'jsonp') {
-        var callbackId = '_' + (callbacks.counter++).toString(36);
-        callbacks[callbackId] = function(data) {
-          callbacks[callbackId].data = data;
-        };
+        //see if the url should be mocked and if so, just return the mocked data
+        var mockedData = httpMocker.resolve(method, url, post);
 
-        var jsonpDone = jsonpReq(url.replace('JSON_CALLBACK', 'angular.callbacks.' + callbackId),
-        function() {
-          if (callbacks[callbackId].data) {
-            completeRequest(callback, 200, callbacks[callbackId].data);
-          } else {
-            completeRequest(callback, status || -2);
-          }
-          delete callbacks[callbackId];
-        });
+        //console.log(post);
+        //console.log(JSON.stringify(mockedData.payload));
+        if(mockedData && post == JSON.stringify(mockedData.payload)) {
+          //we want to be able to simulate a delay in the response
+          $timeout(function() {
+            completeRequest(callback, mockedData.statusCode, mockedData.response, mockedData.headers);
+          }, mockedData.delay);
+        } else {
+          var callbackId = '_' + (callbacks.counter++).toString(36);
+          callbacks[callbackId] = function(data) {
+            callbacks[callbackId].data = data;
+          };
+
+          var jsonpDone = jsonpReq(url.replace('JSON_CALLBACK', 'angular.callbacks.' + callbackId),
+          function() {
+            if (callbacks[callbackId].data) {
+              completeRequest(callback, 200, callbacks[callbackId].data);
+            } else {
+              completeRequest(callback, status || -2);
+            }
+            delete callbacks[callbackId];
+          });
+        }
       } else {
         //see if the url should be mocked and if so, just return the mocked data
         var mockedData = httpMocker.resolve(method, url, post);
