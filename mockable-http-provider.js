@@ -1,6 +1,7 @@
 angular.module('httpMocker', [])
 .factory('httpMocker', [function() {
   var mocks = {};
+  var hasher = new Hashes.SHA1();
 
   var getMockKey = function(method, url, payload) {
     //console.log(payload);
@@ -15,7 +16,7 @@ angular.module('httpMocker', [])
     }
 
     //console.log(mockKey);
-    return mockKey;
+    return hasher.hex(mockKey);
   }
 
   return {
@@ -109,9 +110,11 @@ angular.module('httpMocker', [])
         //see if the url should be mocked and if so, just return the mocked data
         var mockedData = httpMocker.resolve(method, url, post);
 
+        //console.log(mockedData);
+
         //console.log(post);
         //console.log(JSON.stringify(mockedData.payload));
-        if(mockedData && post == JSON.stringify(mockedData.payload)) {
+        if(mockedData) {
           //we want to be able to simulate a delay in the response
           $timeout(function() {
             completeRequest(callback, mockedData.statusCode, mockedData.response, mockedData.headers);
