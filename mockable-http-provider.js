@@ -47,6 +47,33 @@ angular.module('httpMocker', [])
   var SERVER_MATCH = /^([^:]+):\/\/(\w+:{0,1}\w*@)?(\{?[\w\.-]*\}?)(:([0-9]+))?(\/[^\?#]*)?(\?([^#]*))?(#(.*))?$/;
   var noop = function(){};
 
+  function int(str) {
+    return parseInt(str, 10);
+  }
+
+  function isPromiseLike(obj) {
+    return obj && isFunction(obj.then);
+  }
+
+  var msie = int((/msie (\d+)/.exec(lowercase(navigator.userAgent)) || [])[1]);
+  if (isNaN(msie)) {
+    msie = int((/trident\/.*; rv:(\d+)/.exec(lowercase(navigator.userAgent)) || [])[1]);
+  }
+
+  function createXhr(method) {
+    //if IE and the method is not RFC2616 compliant, or if XMLHttpRequest
+    //is not available, try getting an ActiveXObject. Otherwise, use XMLHttpRequest
+    //if it is available
+    if (msie <= 8 && (!method.match(/^(get|post|head|put|delete|options)$/i) ||
+      !window.XMLHttpRequest)) {
+      return new window.ActiveXObject("Microsoft.XMLHTTP");
+    } else if (window.XMLHttpRequest) {
+      return new window.XMLHttpRequest();
+    }
+
+    throw minErr('$httpBackend')('noxhr', "This browser does not support XMLHttpRequest.");
+  }
+
 
   /**
    * @ngdoc object
@@ -73,6 +100,8 @@ angular.module('httpMocker', [])
   };
 
   function createHttpBackend($browser, XHR, $browserDefer, callbacks, rawDocument, locationProtocol, httpMocker, $timeout) {
+    var ABORTED = -1;
+
     // TODO(vojta): fix the signature
     return function(method, url, post, callback, headers, timeout, withCredentials, responseType) {
       var status;
@@ -94,16 +123,13 @@ angular.module('httpMocker', [])
           var callbackId = '_' + (callbacks.counter++).toString(36);
           callbacks[callbackId] = function(data) {
             callbacks[callbackId].data = data;
+            callbacks[callbackId].called = true;
           };
 
           var jsonpDone = jsonpReq(url.replace('JSON_CALLBACK', 'angular.callbacks.' + callbackId),
-          function() {
-            if (callbacks[callbackId].data) {
-              completeRequest(callback, 200, callbacks[callbackId].data);
-            } else {
-              completeRequest(callback, status || -2);
-            }
-            delete callbacks[callbackId];
+              callbackId, function(status, text) {
+            completeRequest(callback, status, callbacks[callbackId].data, "", text);
+            callbacks[callbackId] = noop;
           });
         }
       } else {
@@ -120,46 +146,50 @@ angular.module('httpMocker', [])
             completeRequest(callback, mockedData.statusCode, mockedData.response, mockedData.headers);
           }, mockedData.delay);
         } else {
-          var xhr = new XHR();
+          var xhr = createXhr(method);
 
           xhr.open(method, url, true);
-          _.forEach(headers, function(value, key) {
-            if (value) xhr.setRequestHeader(key, value);
+          angular.forEach(headers, function(value, key) {
+            if (angular.isDefined(value)) {
+                xhr.setRequestHeader(key, value);
+            }
           });
 
           // In IE6 and 7, this might be called synchronously when xhr.send below is called and the
           // response is in the cache. the promise api will ensure that to the app code the api is
           // always async
           xhr.onreadystatechange = function() {
-            if (xhr.readyState == 4) {
-              var responseHeaders = xhr.getAllResponseHeaders();
+            // onreadystatechange might get called multiple times with readyState === 4 on mobile webkit caused by
+            // xhrs that are resolved while the app is in the background (see #5426).
+            // since calling completeRequest sets the `xhr` variable to null, we just check if it's not null before
+            // continuing
+            //
+            // we can't set xhr.onreadystatechange to undefined or delete it because that breaks IE8 (method=PATCH) and
+            // Safari respectively.
+            if (xhr && xhr.readyState == 4) {
+              var responseHeaders = null,
+                  response = null,
+                  statusText = '';
 
-              // TODO(vojta): remove once Firefox 21 gets released.
-              // begin: workaround to overcome Firefox CORS http response headers bug
-              // https://bugzilla.mozilla.org/show_bug.cgi?id=608735
-              // Firefox already patched in nightly. Should land in Firefox 21.
+              if(status !== ABORTED) {
+                responseHeaders = xhr.getAllResponseHeaders();
 
-              // CORS "simple response headers" http://www.w3.org/TR/cors/
-              var value,
-              simpleHeaders = ["Cache-Control", "Content-Language", "Content-Type",
-                "Expires", "Last-Modified", "Pragma"];
-              if (!responseHeaders) {
-                responseHeaders = "";
-                _.forEach(simpleHeaders, function (header) {
-                  var value = xhr.getResponseHeader(header);
-                  if (value) {
-                    responseHeaders += header + ": " + value + "\n";
-                  }
-                });
+                // responseText is the old-school way of retrieving response (supported by IE8 & 9)
+                // response/responseType properties were introduced in XHR Level2 spec (supported by IE10)
+                response = ('response' in xhr) ? xhr.response : xhr.responseText;
               }
-              // end of the workaround.
 
-              // responseText is the old-school way of retrieving response (supported by IE8 & 9)
-              // response and responseType properties were introduced in XHR Level2 spec (supported by IE10)
+              // Accessing statusText on an aborted xhr object will
+              // throw an 'c00c023f error' in IE9 and lower, don't touch it.
+              if (!(status === ABORTED && msie < 10)) {
+                statusText = xhr.statusText;
+              }
+
               completeRequest(callback,
-              status || xhr.status,
-              (xhr.responseType ? xhr.response : xhr.responseText),
-              responseHeaders);
+                  status || xhr.status,
+                  response,
+                  responseHeaders,
+                  statusText);
             }
           };
 
@@ -168,68 +198,94 @@ angular.module('httpMocker', [])
           }
 
           if (responseType) {
-            xhr.responseType = responseType;
+            try {
+              xhr.responseType = responseType;
+            } catch (e) {
+              // WebKit added support for the json responseType value on 09/03/2013
+              // https://bugs.webkit.org/show_bug.cgi?id=73648. Versions of Safari prior to 7 are
+              // known to throw when setting the value "json" as the response type. Other older
+              // browsers implementing the responseType
+              //
+              // The json response type can be ignored if not supported, because JSON payloads are
+              // parsed on the client-side regardless.
+              if (responseType !== 'json') {
+                throw e;
+              }
+            }
           }
 
-          xhr.send(post || '');
+          xhr.send(post || null);
         }
       }
 
       if (timeout > 0) {
         var timeoutId = $browserDefer(timeoutRequest, timeout);
-      } else if (timeout && timeout.then) {
+      } else if (isPromiseLike(timeout)) {
         timeout.then(timeoutRequest);
       }
 
 
       function timeoutRequest() {
-        status = -1;
+        status = ABORTED;
         jsonpDone && jsonpDone();
         xhr && xhr.abort();
       }
 
-      function completeRequest(callback, status, response, headersString) {
-        // URL_MATCH is defined in src/service/location.js
-        var protocol = (url.match(SERVER_MATCH) || ['', locationProtocol])[1];
-
+      function completeRequest(callback, status, response, headersString, statusText) {
         // cancel timeout and subsequent timeout promise resolution
         timeoutId && $browserDefer.cancel(timeoutId);
         jsonpDone = xhr = null;
 
-        // fix status code for file protocol (it's always 0)
-        status = (protocol == 'file') ? (response ? 200 : 404) : status;
+        // fix status code when it is 0 (0 status is undocumented).
+        // Occurs when accessing file resources or on Android 4.1 stock browser
+        // while retrieving files from application cache.
+        if (status === 0) {
+          status = response ? 200 : urlResolve(url).protocol == 'file' ? 404 : 0;
+        }
 
         // normalize IE bug (http://bugs.jquery.com/ticket/1450)
-        status = status == 1223 ? 204 : status;
+        status = status === 1223 ? 204 : status;
+        statusText = statusText || '';
 
-        callback(status, response, headersString);
+        callback(status, response, headersString, statusText);
         $browser.$$completeOutstandingRequest(noop);
       }
     };
 
-    function jsonpReq(url, done) {
+    function jsonpReq(url, callbackId, done) {
       // we can't use jQuery/jqLite here because jQuery does crazy shit with script elements, e.g.:
       // - fetches local scripts via XHR and evals them
       // - adds and immediately removes script elements from the document
-      var script = rawDocument.createElement('script'),
-      doneWrapper = function() {
+      var script = rawDocument.createElement('script'), callback = null;
+      script.type = "text/javascript";
+      script.src = url;
+      script.async = true;
+
+      callback = function(event) {
+        removeEventListenerFn(script, "load", callback);
+        removeEventListenerFn(script, "error", callback);
         rawDocument.body.removeChild(script);
-        if (done) done();
+        script = null;
+        var status = -1;
+        var text = "unknown";
+
+        if (event) {
+          if (event.type === "load" && !callbacks[callbackId].called) {
+            event = { type: "error" };
+          }
+          text = event.type;
+          status = event.type === "error" ? 404 : 200;
+        }
+
+        if (done) {
+          done(status, text);
+        }
       };
 
-      script.type = 'text/javascript';
-      script.src = url;
-
-      if (msie) {
-        script.onreadystatechange = function() {
-          if (/loaded|complete/.test(script.readyState)) doneWrapper();
-        };
-      } else {
-        script.onload = script.onerror = doneWrapper;
-      }
-
+      addEventListenerFn(script, "load", callback);
+      addEventListenerFn(script, "error", callback);
       rawDocument.body.appendChild(script);
-      return doneWrapper;
+      return callback;
     }
   }
-}])
+}]);
