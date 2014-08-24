@@ -1,6 +1,6 @@
 {
   "name": "angular-mockable-http-provider",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "dependencies": {
     "jshashes": "1.0.x"
   },

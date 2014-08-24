@@ -1,5 +1,7 @@
 # Angular Mockable HTTP Provider
 
+**NOTE: Version 0.3+ is designed to work with Angular 1.3.x, use version 0.2.x if you are using angular 1.2.x.å**
+
 This is not designed as a replacement to $httpBackend as this will never do some of the things $httpBackend can (like verifying the number of times a request was called or verifying there are no more expected calls left).
 
 The primary thing right now that this component can do that I could not find any easy way to do with $httpBackend is to be able to add delay to the mocked responses. I use DalekJS instead of Karma to unit test my UI (why I don't use Karma is a whole other conversion outside the scope of this component) and only certain things can be tested properly if there is a delay in the mocked response. For example, I might display some sort of loading indicator when fetching data so if the data is returned near instant like it is with $httpBackend, I can't verify that type of functionality.  The only thing I could find with adding delays to response with $httpBackend would add the delay to all responses which is not very practical.
