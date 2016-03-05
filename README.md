@@ -1,3 +1,6 @@
+**Since I am no longer working with Angular, I am no longer maintaining this project**
+
+
 # Angular Mockable HTTP Provider
 
 **NOTE: Version 0.3+ is designed to work with Angular 1.3.x, use version 0.2.x if you are using angular 1.2.x.å**
